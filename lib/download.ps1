@@ -637,7 +637,44 @@ function handle_special_urls($url) {
         }
     }
 
+    # Optionally rewrite eligible GitHub URLs through a user-configured mirror/proxy.
+    $url = Rewrite-DownloadUrl $url
+
     return $url
+}
+
+function Rewrite-DownloadUrl([string]$url) {
+    # Prepend a mirror/proxy prefix to GitHub download URLs so they can be fetched
+    # faster from regions with poor GitHub connectivity (e.g. mainland China).
+    #
+    # The prefix is read from the 'github_proxy' config entry. When it is unset or
+    # empty, the URL is returned unchanged, i.e. behaviour is identical to official
+    # Scoop. Only plain http(s) URLs on GitHub hosts are rewritten; every other
+    # download source is left untouched.
+    #
+    #   scoop config github_proxy https://your-proxy.example.com/
+    #
+    #   https://github.com/user/repo/releases/download/v1/app.zip
+    #     -> https://your-proxy.example.com/https://github.com/user/repo/releases/download/v1/app.zip
+    $proxy = get_config GITHUB_PROXY
+    if (!$proxy) { return $url }
+
+    # Hosts eligible for rewriting.
+    $githubHosts = @(
+        'github.com'
+        'raw.githubusercontent.com'
+        'objects.githubusercontent.com'
+    )
+
+    # Extract the host; skip anything that is not a plain http(s) URL.
+    if ($url -notmatch '^https?://(?<host>[^/]+)/') { return $url }
+    if ($githubHosts -notcontains $Matches['host'].ToLowerInvariant()) { return $url }
+
+    # Normalise the prefix to end with a single '/' and guard against double-prefixing.
+    $proxy = $proxy.TrimEnd('/') + '/'
+    if ($url.StartsWith($proxy)) { return $url }
+
+    return "$proxy$url"
 }
 
 ### Remote file information

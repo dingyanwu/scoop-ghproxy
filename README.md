@@ -1,146 +1,94 @@
-<h1 align="center">Scoop</h1>
+<h1 align="center">scoop-ghproxy</h1>
 
-<!--<img src="scoop.png" alt="Long live Scoop!"/>-->
-<p align="center">
-        <a href="https://github.com/ScoopInstaller/Scoop#what-does-scoop-do">Features</a>
-        |
-        <a href="https://github.com/ScoopInstaller/Scoop#installation">Installation</a>
-        |
-        <a href="https://github.com/ScoopInstaller/Scoop/wiki">Documentation</a>
-</p>
+<p align="center">在官方 <a href="https://github.com/ScoopInstaller/Scoop">Scoop</a> 上添加一个 GitHub 下载加速的开关。</p>
 
 ---
 
-<p align="center">
-    <a href="https://github.com/ScoopInstaller/Scoop">
-        <img src="https://img.shields.io/github/languages/code-size/ScoopInstaller/Scoop.svg" alt="Code Size" />
-    </a>
-    <a href="https://github.com/ScoopInstaller/Scoop">
-        <img src="https://img.shields.io/github/repo-size/ScoopInstaller/Scoop.svg" alt="Repository size" />
-    </a>
-    <a href="https://github.com/ScoopInstaller/Scoop/actions/workflows/ci.yml">
-        <img src="https://github.com/ScoopInstaller/Scoop/actions/workflows/ci.yml/badge.svg" alt="Scoop Core CI Tests" />
-    </a>
-    <a href="https://discord.gg/s9yRQHt">
-        <img src="https://img.shields.io/badge/chat-on%20discord-7289DA.svg" alt="Discord Chat" />
-    </a>
-    <a href="./LICENSE">
-        <img src="https://img.shields.io/badge/license-UNLICENSE%20or%20MIT-blue" alt="License" />
-    </a>
-</p>
+这是 [ScoopInstaller/Scoop](https://github.com/ScoopInstaller/Scoop) 的 Fork，只多了一个配置项 `github_proxy`：给 GitHub 下载地址自动加上加速前缀，解决 Release 下载慢的问题，
+不配置时行为和官方完全一样，每天自动同步官方。
 
-Scoop is a command-line installer for Windows.
+## 和其他方案的区别
 
-## What does Scoop do?
+| 方案 | 做法 | 加速范围 | 优点 | 缺点 |
+|------|------|------|------|------|
+| **本 Fork** | 改 Scoop 下载引擎 | 任意 bucket 的 GitHub 下载 | 加速地址自己定、随时可关；官方/第三方 bucket 都能加速；一键脚本自带加速安装 | 感觉没什么缺点了.. |
+| [scoop-cn](https://github.com/duzyn/scoop-cn) / [scoop-proxy-cn](https://github.com/lzwme/scoop-proxy-cn) | 改 manifest | 仅自己的 bucket | 开箱即用 | 加速地址写死不能换，速度往往很慢 |
+| [Gitee 中国版 Scoop](https://gitee.com/scoop-installer/scoop) | 托管在 Gitee | 内置代理 + 镜像 bucket | 国外流量全走镜像加速 | 很多镜像只支持 GitHub 加速，不支持其它地址加速，需频繁开关URL_PROXY |
 
-Scoop installs apps from the command line with a minimal amount of friction. It:
+本 Fork 的核心区别：加速和软件桶解耦，代理地址自己定、随时可关，内置下载器和 aria2 都生效。
 
-- Eliminates [User Account Control](https://learn.microsoft.com/windows/security/application-security/application-control/user-account-control/) (UAC) prompt notifications.
-- Hides the graphical user interface (GUI) of wizard-style installers.
-- Prevents polluting the `PATH` environment variable. Normally, this variable gets cluttered as different apps are installed on the device.
-- Avoids unexpected side effects from installing and uninstalling apps.
-- Resolves and installs dependencies automatically.
-- Performs all the necessary steps to get an app to a working state.
+## `github_proxy` 是怎么工作的
 
-Scoop is quite script-friendly. Your environment can become the way you like by using repeatable setups. For example:
+只改写这三个主机的地址：`github.com`、`raw.githubusercontent.com`、`objects.githubusercontent.com`。
 
 ```console
-scoop install sudo
-sudo scoop install 7zip git openssh --global
-scoop install aria2 curl grep sed less touch
-scoop install python ruby go perl
+scoop config github_proxy https://your-proxy.example.com/   # 启用
+scoop config github_proxy                                    # 查看
+scoop config rm github_proxy                                 # 关闭
 ```
 
-If you have built software that you would like others to use, Scoop is an alternative to building an installer (like MSI or InnoSetup). You just need to compress your app to a `.zip` file and provide a JSON manifest that describes how to install it.
+配置后，
 
-## Installation
+`https://github.com/user/repo/releases/download/v1/app.zip`
 
-Run the following commands from a regular (non-admin) PowerShell terminal to install Scoop:
+会变成
+
+ `https://your-proxy.example.com/https://github.com/user/repo/releases/download/v1/app.zip`。
+
+非 GitHub 地址不受影响。
+
+## 安装
+
+Scoop 的流量分两类，要分别加速：
+
+- **git 操作**（拉本体、`bucket add`）：靠给仓库地址加加速前缀（`scoop_repo`）；
+- **应用下载**（Release）：靠设置 `github_proxy` 参数。
+
+下面用 [`gh-proxy.org`](https://gh-proxy.org) 做加速说明。
+
+### 已装官方 Scoop
+
 
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+# 把自更新源切到本 Fork（加速前缀 + 完整地址）
+scoop config scoop_repo https://gh-proxy.org/https://github.com/dingyanwu/scoop-ghproxy
+
+# 删掉本体目录里残留的 .git、.github，避免切源后 scoop update 不生效（自动定位路径）
+$dir = scoop prefix scoop
+Remove-Item "$dir\.git", "$dir\.github" -Recurse -Force -ErrorAction SilentlyContinue
+
+scoop update
+
+# 开启下载加速
+scoop config github_proxy https://gh-proxy.org/
 ```
 
-**Note**: The first command makes your device allow running the installation and management scripts. This is necessary because Windows 10 client devices restrict execution of any PowerShell scripts by default.
 
-It will install Scoop to its default location:
+恢复官方：
 
-`C:\Users\<YOUR USERNAME>\scoop`
-
-You can find the complete documentation about the installer, including advanced installation configurations, in [ScoopInstaller/Install](https://github.com/ScoopInstaller/Install). Please create new issues there if you have questions about the installation.
-
-## Multi-connection downloads with `aria2`
-
-Scoop can utilize [`aria2`](https://github.com/aria2/aria2) to use multi-connection downloads. Simply install `aria2` through Scoop and it will be used for all downloads afterward.
-
-```console
-scoop install aria2
+```powershell
+scoop config scoop_repo https://github.com/ScoopInstaller/Scoop
+scoop config rm github_proxy
+scoop update
 ```
 
-By default, `scoop` displays a warning when running `scoop install` or `scoop update` while `aria2` is enabled. This warning can be suppressed by running `scoop config aria2-warning-enabled false`.
+### 全新安装
 
-You can tweak the following `aria2` settings with the `scoop config` command:
+用加速地址跑安装脚本，直接装本仓库的版本（本体、main 桶、`scoop_repo`、`github_proxy` 都会自动配好）：
 
-- aria2-enabled (default: true)
-- aria2-warning-enabled (default: true)
-- aria2-fallback-enabled (default: true)
-- [aria2-retry-wait](https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-retry-wait) (default: 2)
-- [aria2-split](https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-s) (default: 5)
-- [aria2-max-connection-per-server](https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-x) (default: 5)
-- [aria2-min-split-size](https://aria2.github.io/manual/en/html/aria2c.html#cmdoption-k) (default: 5M)
-- [aria2-options](https://aria2.github.io/manual/en/html/aria2c.html#options) (default: )
-
-## Inspiration
-
-- [Homebrew](https://brew.sh/)
-- [Sub](https://signalvnoise.com/posts/3264-automating-with-convention-introducing-sub)
-
-## What sort of apps can Scoop install?
-
-The apps that are most likely to get installed fine with Scoop are those referred to as "portable" apps. These apps are compressed files which can run standalone after being extracted. This type of app does not produce side effects like changing the Windows Registry or placing files outside the app directory.
-
-Scoop also supports installer files and their uninstallation methods. Likewise, it can handle single-file apps and PowerShell scripts. These do not even need to be compressed. See the [runat](https://github.com/ScoopInstaller/Main/blob/master/bucket/runat.json) package for an example: it is simply a GitHub gist.
-
-### Contribute to this project
-
-If you would like to improve Scoop by adding features or fixing bugs, please read our [Contributing Guide](https://github.com/ScoopInstaller/.github/blob/main/.github/CONTRIBUTING.md).
-
-### Support this project
-
-If you find Scoop useful and would like to support the ongoing development and maintenance of this project, you can donate here:
-
-- [PayPal](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=DM2SUH9EUXSKJ) (one-time donations)
-
-## Known application buckets
-
-The following buckets are known to Scoop:
-
-- [main](https://github.com/ScoopInstaller/Main) - Default bucket which contains popular non-GUI apps.
-- [extras](https://github.com/ScoopInstaller/Extras) - Apps that do not fit the main bucket's [criteria](https://github.com/ScoopInstaller/Scoop/wiki/Criteria-for-including-apps-in-the-main-bucket).
-- [games](https://github.com/ScoopInstaller/Games) - Open-source and freeware video games and game-related tools.
-- [nerd-fonts](https://github.com/matthewjberger/scoop-nerd-fonts) -  Nerd Fonts.
-- [nirsoft](https://github.com/ScoopInstaller/Nirsoft) - A collection of over 250+ apps from [Nirsoft](https://nirsoft.net).
-- [sysinternals](https://github.com/ScoopInstaller/Sysinternals) - The Sysinternals suite from [Microsoft](https://learn.microsoft.com/sysinternals/).
-- [java](https://github.com/ScoopInstaller/Java) - A collection of Java development kits (JDKs) and Java runtime engines (JREs), Java's virtual machine debugging tools and Java based runtime engines.
-- [nonportable](https://github.com/ScoopInstaller/Nonportable) - Non-portable apps (may trigger UAC prompts).
-- [php](https://github.com/ScoopInstaller/PHP) - Installers for most versions of PHP.
-- [versions](https://github.com/ScoopInstaller/Versions) - Alternative versions of apps found in other buckets.
-
-The `main` bucket is installed by default. You can make use of more buckets by typing:
-
-```console
-scoop bucket add <name>
+```powershell
+irm https://gh-proxy.org/raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
 ```
 
-For example, to add the `extras` bucket, type:
+**加速地址就是命令里用的那个前缀，脚本会自动识别**，装完继续用它自更新和下载。想换加速地址或直连，直接改命令里的前缀就行：
 
-```console
-scoop bucket add extras
+```powershell
+# 换成别的加速地址
+irm https://xxx.com/https://raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
+
+# 不用镜像（直连 GitHub）
+irm https://raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
 ```
 
-You would be able to install apps from the `extras` bucket now.
+> 脚本改自[官方安装器](https://github.com/ScoopInstaller/Install)，只是把写死的 `ScoopInstaller/Scoop` 换成本 Fork，并从安装 URL 自动识别加速地址套到所有 GitHub 地址上。其余参数（`-ScoopDir`、`-Proxy` 等）与官方一致。
 
-## Other application buckets
-
-Many other application buckets hosted on GitHub can be found on [ScoopSearch](https://scoop.sh/) or via [other search engines](https://rasa.github.io/scoop-directory/#other-search-engines).

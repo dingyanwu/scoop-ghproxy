@@ -5,3 +5,7 @@
 *.exe -text
 *.zip -text
 *.dll -text
+
+# Fork: keep our own README during upstream merges (needs the "ours" merge
+# driver configured, see .github/workflows/sync-upstream.yml).
+README.md merge=ours
