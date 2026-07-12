@@ -666,6 +666,20 @@ function Rewrite-DownloadUrl([string]$url) {
         'objects.githubusercontent.com'
     )
 
+    # Nested-proxy unwrapping. A manifest URL may already be wrapped by
+    # some other proxy, e.g.
+    #   https://gh-proxy.com/https://github.com/user/repo/...
+    #   https://gh-proxy.com/http://github.com/user/repo/...
+    #   https://gh-proxy.com/github.com/user/repo/...
+    # Strip the outer proxy first so we can re-wrap the bare GitHub URL with our
+    # own mirror. The greedy '.+/' walks to the last embedded GitHub host, so
+    # even multiply-nested prefixes collapse to a single bare URL, and any
+    # embedded scheme (or missing scheme) is normalised back to https://.
+    $hostPattern = ($githubHosts | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    if ($url -match "^https?://.+/(?:https?://)?(?<target>(?:$hostPattern)/.+)$") {
+        $url = "https://$($Matches['target'])"
+    }
+
     # Extract the host; skip anything that is not a plain http(s) URL.
     if ($url -notmatch '^https?://(?<host>[^/]+)/') { return $url }
     if ($githubHosts -notcontains $Matches['host'].ToLowerInvariant()) { return $url }

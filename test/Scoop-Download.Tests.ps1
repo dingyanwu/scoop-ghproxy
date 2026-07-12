@@ -88,6 +88,31 @@ Describe 'Rewrite-DownloadUrl' -Tag 'Scoop' {
             Rewrite-DownloadUrl 'https://github.com/test/test/releases/download/a.zip' |
                 Should -Be 'https://proxy/https://github.com/test/test/releases/download/a.zip'
         }
+
+        It 'unwraps a nested proxy with an https:// embedded github url' {
+            Rewrite-DownloadUrl 'https://gh-proxy.com/https://github.com/test/test/releases/download/a.zip' |
+                Should -Be 'https://proxy/https://github.com/test/test/releases/download/a.zip'
+        }
+
+        It 'unwraps a nested proxy with an http:// embedded github url' {
+            Rewrite-DownloadUrl 'https://gh-proxy.com/http://github.com/test/test/releases/download/a.zip' |
+                Should -Be 'https://proxy/https://github.com/test/test/releases/download/a.zip'
+        }
+
+        It 'unwraps a nested proxy with a schemeless embedded github url' {
+            Rewrite-DownloadUrl 'https://gh-proxy.com/github.com/test/test/releases/download/a.zip' |
+                Should -Be 'https://proxy/https://github.com/test/test/releases/download/a.zip'
+        }
+
+        It 'unwraps a nested proxy wrapping raw.githubusercontent.com' {
+            Rewrite-DownloadUrl 'https://gh-proxy.com/raw.githubusercontent.com/test/test/master/a.txt' |
+                Should -Be 'https://proxy/https://raw.githubusercontent.com/test/test/master/a.txt'
+        }
+
+        It 'collapses multiply-nested proxies to a single prefix' {
+            Rewrite-DownloadUrl 'https://a.com/https://b.com/github.com/test/test/releases/download/a.zip' |
+                Should -Be 'https://proxy/https://github.com/test/test/releases/download/a.zip'
+        }
     }
 
     Context 'github_proxy is not configured' {

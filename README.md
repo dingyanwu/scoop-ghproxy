@@ -37,6 +37,18 @@ scoop config rm github_proxy                                 # 关闭
 
 非 GitHub 地址不受影响。
 
+### 套娃代理会自动识别
+
+如果 manifest 里的下载地址本身已经套了别的代理，会先剥掉外层代理、还原出原始 GitHub 地址，再套上你配置的 `github_proxy`。下面几种写法都能识别（含无 scheme、`http://`、`https://`，以及多层嵌套）：
+
+```
+https://gh-proxy.com/github.com/user/repo/...
+https://gh-proxy.com/http://github.com/user/repo/...
+https://gh-proxy.com/https://github.com/user/repo/...
+```
+
+都会被还原成 `https://github.com/user/repo/...` 再套上 `https://your-proxy.example.com/`。
+
 ## 安装
 
 Scoop 的流量分两类，要分别加速：
