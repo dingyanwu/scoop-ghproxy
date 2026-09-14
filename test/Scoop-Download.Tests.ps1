@@ -48,6 +48,25 @@ Describe 'url_remote_filename' -Tag 'Scoop' {
     }
 }
 
+Describe 'Invoke-Download referer retry' -Tag 'Scoop' {
+    It 'retries once without referer when the first attempt fails' {
+        $script:attempts = @()
+        Mock Invoke-DownloadOnce {
+            $script:attempts += [bool] $NoReferer
+            if (-not $NoReferer) { throw 'hotlink protected' }
+        }
+        { Invoke-Download 'https://example.com/a.zip' 'a.zip' $null $false } | Should -Not -Throw
+        $script:attempts | Should -Be @($false, $true)
+    }
+
+    It 'does not retry when the first attempt succeeds' {
+        $script:calls = 0
+        Mock Invoke-DownloadOnce { $script:calls++ }
+        Invoke-Download 'https://example.com/a.zip' 'a.zip' $null $false
+        $script:calls | Should -Be 1
+    }
+}
+
 Describe 'Rewrite-DownloadUrl' -Tag 'Scoop' {
     Context 'github_proxy is configured' {
         BeforeEach {

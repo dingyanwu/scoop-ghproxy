@@ -87,12 +87,23 @@ function Start-Download ($url, $to, $cookies) {
 }
 
 function Invoke-Download ($url, $to, $cookies, $progress) {
+    try {
+        Invoke-DownloadOnce $url $to $cookies $progress
+    } catch {
+        # ponytail: some servers (anti-hotlinking, GitHub mirrors) reject
+        # requests carrying a Referer; retry once without it before giving up.
+        info 'Download failed, retrying without Referer header...'
+        Invoke-DownloadOnce $url $to $cookies $progress -NoReferer
+    }
+}
+
+function Invoke-DownloadOnce ($url, $to, $cookies, $progress, [Switch] $NoReferer) {
     # download with filesize and progress indicator
     $reqUrl = ($url -split '#')[0]
     $wreq = [Net.WebRequest]::Create($reqUrl)
     if ($wreq -is [Net.HttpWebRequest]) {
         $wreq.UserAgent = Get-UserAgent
-        if (-not ($url -match 'sourceforge\.net' -or $url -match 'portableapps\.com')) {
+        if (-not $NoReferer -and -not ($url -match 'sourceforge\.net' -or $url -match 'portableapps\.com')) {
             $wreq.Referer = strip_filename $url
         }
         if ($url -match '^https://api\.github\.com/repos') {
