@@ -1,106 +1,70 @@
 <h1 align="center">scoop-ghproxy</h1>
 
-<p align="center">在官方 <a href="https://github.com/ScoopInstaller/Scoop">Scoop</a> 上添加一个 GitHub 下载加速的开关。</p>
+<p align="center">给官方 <a href="https://github.com/ScoopInstaller/Scoop">Scoop</a> 加一个 GitHub 加速开关。</p>
 
 ---
 
-这是 [ScoopInstaller/Scoop](https://github.com/ScoopInstaller/Scoop) 的 Fork，只多了一个配置项 `github_proxy`：给 GitHub 下载地址自动加上加速前缀，解决 Release 下载慢的问题，
-不配置时行为和官方完全一样，每天自动同步官方。
+这是 [ScoopInstaller/Scoop](https://github.com/ScoopInstaller/Scoop) 的 Fork，只多一个配置项 `github_proxy`。配上之后，GitHub 相关地址会自动套上你指定的加速前缀；不配时行为和官方完全一样。仓库每天自动同步官方。
 
 ## 和其他方案的区别
 
-| 方案 | 做法 | 加速范围 | 优点 | 缺点 |
-|------|------|------|------|------|
-| **本 Fork** | 改 Scoop 下载引擎 | 任意 bucket 的 GitHub 下载 | 加速地址自己定、随时可关；官方/第三方 bucket 都能加速；一键脚本自带加速安装 | 感觉没什么缺点了.. |
-| [scoop-cn](https://github.com/duzyn/scoop-cn) / [scoop-proxy-cn](https://github.com/lzwme/scoop-proxy-cn) | 改 manifest | 仅自己的 bucket | 开箱即用 | 加速地址写死不能换，速度往往很慢 |
-| [Gitee 中国版 Scoop](https://gitee.com/scoop-installer/scoop) | 托管在 Gitee | 内置代理 + 镜像 bucket | 国外流量全走镜像加速 | 很多镜像只支持 GitHub 加速，不支持其它地址加速，需频繁开关URL_PROXY |
+| 方案 | 加速范围 | 限制 |
+|---|---|---|
+| 本 Fork | 任意 bucket 的 GitHub 下载、`scoop update`（本体、桶） | — |
+| [scoop-cn](https://github.com/duzyn/scoop-cn) / [scoop-proxy-cn](https://github.com/lzwme/scoop-proxy-cn) | 只有自己的 bucket（改 manifest） | 加速地址写死，不能换 |
+| [Gitee 中国版](https://gitee.com/scoop-installer/scoop) | 内置代理 + 镜像 bucket | 镜像大多只支持 GitHub，其它源直接下不动|
 
-本 Fork 的核心区别：加速和软件桶解耦，代理地址自己定、随时可关，内置下载器和 aria2 都生效。
-
-## `github_proxy` 是怎么工作的
-
-只改写这三个主机的地址：`github.com`、`raw.githubusercontent.com`、`objects.githubusercontent.com`。
+## 配置
 
 ```console
-scoop config github_proxy https://your-proxy.example.com/   # 启用
-scoop config github_proxy                                    # 查看
-scoop config rm github_proxy                                 # 关闭
+scoop config github_proxy https://your-proxy.example.com/   # 开启
+scoop config github_proxy                                   # 查看
+scoop config rm github_proxy                                # 关闭
 ```
 
-配置后，
-
-`https://github.com/user/repo/releases/download/v1/app.zip`
-
-会变成
-
- `https://your-proxy.example.com/https://github.com/user/repo/releases/download/v1/app.zip`。
-
-非 GitHub 地址不受影响。
-
-### 套娃代理会自动识别
-
-如果 manifest 里的下载地址本身已经套了别的代理，会先剥掉外层代理、还原出原始 GitHub 地址，再套上你配置的 `github_proxy`。下面几种写法都能识别（含无 scheme、`http://`、`https://`，以及多层嵌套）：
+只改写这三个主机：`github.com`、`raw.githubusercontent.com`、`objects.githubusercontent.com`。
 
 ```
-https://gh-proxy.com/github.com/user/repo/...
-https://gh-proxy.com/http://github.com/user/repo/...
-https://gh-proxy.com/https://github.com/user/repo/...
+https://github.com/user/repo/releases/download/v1/app.zip
+↓
+https://your-proxy.example.com/https://github.com/user/repo/releases/download/v1/app.zip
 ```
 
-都会被还原成 `https://github.com/user/repo/...` 再套上 `https://your-proxy.example.com/`。
+其它地址不动。manifest 里本来就套了代理的会先剥掉外层再重新套，`gh-proxy.com/github.com/...`、`gh-proxy.com/http://github.com/...`、多层嵌套都能认。
+
+配置对这三处生效：
+
+- 应用下载（Release）。
+- 拉桶（`scoop update`）：先走加速地址，失败回退直连。改写只在这一次 `git pull` 里生效（git 的 `insteadOf`），桶的 remote 不改，`scoop bucket list` 还是原地址。
+- 更新本体（`scoop update`）：直接按 `scoop_repo` 拉取，地址剥掉旧前缀后套当前加速地址，本体的 `remote.origin.url` 不参与判断也不会被改。
 
 ## 安装
 
-Scoop 的流量分两类，要分别加速：
-
-- **git 操作**（拉本体、`bucket add`）：靠给仓库地址加加速前缀（`scoop_repo`）；
-- **应用下载**（Release）：靠设置 `github_proxy` 参数。
-
-下面用 [`gh-proxy.org`](https://gh-proxy.org) 做加速说明。
-
-### 已装官方 Scoop
-
+已经在用官方 Scoop：
 
 ```powershell
-# 把自更新源切到本 Fork（加速前缀 + 完整地址）
-scoop config scoop_repo https://gh-proxy.org/https://github.com/dingyanwu/scoop-ghproxy
-
-# 删掉本体目录里残留的 .git、.github，避免切源后 scoop update 不生效（自动定位路径）
-$dir = scoop prefix scoop
-Remove-Item "$dir\.git", "$dir\.github" -Recurse -Force -ErrorAction SilentlyContinue
-
+# 首次切换要带加速前缀，把xxx.com换成你自己的镜像
+scoop config scoop_repo https://xxx.com/https://github.com/dingyanwu/scoop-ghproxy
+scoop config github_proxy https://xxx.com/
 scoop update
-
-# 开启下载加速
-scoop config github_proxy https://gh-proxy.org/
 ```
 
+切过来之后 `scoop_repo` 带不带前缀都行。如果卡在 git 上，删掉 `$(scoop prefix scoop)\.git` 再跑一次，会按 `scoop_repo` 重新克隆。
 
-恢复官方：
+回官方：
 
 ```powershell
 scoop config scoop_repo https://github.com/ScoopInstaller/Scoop
+scoop update                 # 会提示确认离开本 Fork，输入 y
 scoop config rm github_proxy
-scoop update
 ```
 
-### 全新安装
-
-用加速地址跑安装脚本，直接装本仓库的版本（本体、main 桶、`scoop_repo`、`github_proxy` 都会自动配好）：
+全新安装：
 
 ```powershell
-irm https://gh-proxy.org/raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
-```
-
-**加速地址就是命令里用的那个前缀，脚本会自动识别**，装完继续用它自更新和下载。想换加速地址或直连，直接改命令里的前缀就行：
-
-```powershell
-# 换成别的加速地址
 irm https://xxx.com/https://raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
-
-# 不用镜像（直连 GitHub）
-irm https://raw.githubusercontent.com/dingyanwu/scoop-ghproxy/master/install.ps1 | iex
 ```
 
-> 脚本改自[官方安装器](https://github.com/ScoopInstaller/Install)，只是把写死的 `ScoopInstaller/Scoop` 换成本 Fork，并从安装 URL 自动识别加速地址套到所有 GitHub 地址上。其余参数（`-ScoopDir`、`-Proxy` 等）与官方一致。
+`xxx.com` 换成能用的加速地址，装完之后自更新和下载继续用它。
 
+> 安装脚本改自[官方安装器](https://github.com/ScoopInstaller/Install)：仓库换成本 Fork，并从安装 URL 识别加速前缀。`-ScoopDir`、`-Proxy` 等参数与官方一致。
