@@ -2,9 +2,10 @@ name: Sync upstream
 
 # Keeps this fork up to date with the official ScoopInstaller/Scoop repository.
 # Runs daily and can also be triggered manually from the Actions tab.
-# If the automatic merge hits a conflict, the job fails loudly so it can be
-# resolved by hand (the fork's own changes are intentionally minimal to keep
-# such conflicts rare).
+# The fork's own commits are rebased on top of the official master, keeping the
+# history linear. If the automatic rebase hits a conflict, the job fails loudly
+# so it can be resolved by hand (the fork's own changes are intentionally
+# minimal to keep such conflicts rare).
 
 on:
   schedule:
@@ -12,19 +13,19 @@ on:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
-# Allow the job to push the merge commit back to the fork.
+# Allow the job to push the rebased history back to the fork.
 permissions:
   contents: write
 
 jobs:
   sync:
-    name: Merge upstream into fork
+    name: Rebase fork onto upstream
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fork (default branch)
         uses: actions/checkout@v4
         with:
-          # Full history is required for a real merge.
+          # Full history is required for a real rebase.
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -33,28 +34,22 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-      - name: Register "ours" merge driver
-        # Files marked `merge=ours` in .gitattributes (e.g. README.md) always
-        # keep this fork's version, so upstream changes never cause conflicts
-        # there. `true` succeeds without touching the file, i.e. keep ours.
-        run: git config merge.ours.driver true
-
       - name: Add upstream and fetch
         run: |
           git remote add upstream https://github.com/ScoopInstaller/Scoop.git
           git fetch upstream master
 
-      - name: Merge upstream/master
+      - name: Rebase onto upstream/master
         run: |
           set -e
-          if git merge --no-edit upstream/master; then
-            echo 'Merged upstream/master successfully.'
+          if git rebase upstream/master; then
+            echo 'Fork commits rebased onto upstream/master.'
           else
-            echo '::error::Merge conflict while syncing with upstream ScoopInstaller/Scoop.'
-            echo '::error::Resolve the conflict manually, then push to update the fork.'
-            git merge --abort
+            echo '::error::Rebase conflict while syncing with upstream ScoopInstaller/Scoop.'
+            echo '::error::Resolve the conflict manually, then force-push to update the fork.'
+            git rebase --abort
             exit 1
           fi
 
       - name: Push to fork
-        run: git push origin HEAD
+        run: git push --force-with-lease origin HEAD:master

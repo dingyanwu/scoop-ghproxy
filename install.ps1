@@ -117,9 +117,9 @@ function Exit-Install {
         [Int] $ErrorCode = 1
     )
 
-    if ($IS_EXECUTED_FROM_IEX) {
-        # Don't abort with `exit` that would close the PS session if invoked
-        # with iex, yet set `LASTEXITCODE` for the caller to check
+    if ((-not $env:CI) -and $IS_EXECUTED_FROM_IEX) {
+        # Don't abort with `exit` that would close the interactive PS session
+        # if invoked with iex, yet set `LASTEXITCODE` for the caller to check
         $Global:LASTEXITCODE = $ErrorCode
         break
     } else {
@@ -203,6 +203,38 @@ function Test-ValidateParameter {
     if ($ProxyUseDefaultCredentials -and $null -ne $ProxyCredential) {
         Deny-Install "ProxyUseDefaultCredentials is conflict with ProxyCredential. Don't use the -ProxyCredential and -ProxyUseDefaultCredentials together."
     }
+
+    if (-not (Test-Path $SCOOP_DIR -IsValid)) {
+        Deny-Install "'$SCOOP_DIR' is not a valid path, please specify another path."
+    }
+
+    if (-not (Test-Path $SCOOP_GLOBAL_DIR -IsValid)) {
+        Deny-Install "'$SCOOP_GLOBAL_DIR' is not a valid path, please specify another path."
+    }
+
+    if (-not (Test-Path $SCOOP_CACHE_DIR -IsValid)) {
+        Deny-Install "'$SCOOP_CACHE_DIR' is not a valid path, please specify another path."
+    }
+
+    if (Test-Path $SCOOP_DIR -PathType Leaf) {
+        Deny-Install "'$SCOOP_DIR' is a file, please remove it or specify another path."
+    }
+
+    if ((Test-Path $SCOOP_DIR -PathType Container) -and (Test-Path "$SCOOP_DIR\*")) {
+        Deny-Install "'$SCOOP_DIR' exists and is not empty, please specify another path."
+    }
+
+    if (Test-Path $SCOOP_GLOBAL_DIR -PathType Leaf) {
+        Deny-Install "'$SCOOP_GLOBAL_DIR' is a file, please remove it or specify another path."
+    }
+
+    if ((Test-Path $SCOOP_GLOBAL_DIR -PathType Container) -and (Test-Path "$SCOOP_GLOBAL_DIR\*")) {
+        Deny-Install "'$SCOOP_GLOBAL_DIR' exists and is not empty, please specify another path."
+    }
+
+    if (Test-Path $SCOOP_CACHE_DIR -PathType Leaf) {
+        Deny-Install "'$SCOOP_CACHE_DIR' is a file, please remove it or specify another path."
+    }
 }
 
 function Test-IsAdministrator {
@@ -229,8 +261,8 @@ function Test-Prerequisite {
 
     # Detect if RunAsAdministrator, there is no need to run as administrator when installing Scoop
     if (!$RunAsAdmin -and (Test-IsAdministrator)) {
-        # Exception: Windows Sandbox, GitHub Actions CI
-        $exception = ($env:USERNAME -eq 'WDAGUtilityAccount') -or ($env:GITHUB_ACTIONS -eq 'true' -and $env:CI -eq 'true')
+        # Exception: CI, Windows Sandbox
+        $exception = $env:CI -or ($env:USERNAME -eq 'WDAGUtilityAccount')
         if (!$exception) {
             Deny-Install 'Running the installer as administrator is disabled by default, see https://github.com/ScoopInstaller/Install#for-admin for details.'
         }
@@ -670,10 +702,10 @@ function Test-CommandAvailable {
 
 function Install-Scoop {
     Write-InstallInfo 'Initializing...'
-    # Validate install parameters
-    Test-ValidateParameter
     # Check prerequisites
     Test-Prerequisite
+    # Validate install parameters
+    Test-ValidateParameter
     # Enable TLS 1.2 (also required by the mirror probing below)
     Optimize-SecurityProtocol
 
@@ -795,11 +827,35 @@ function Write-DebugInfo {
     Write-Verbose "SCOOP_CONFIG_HOME: $SCOOP_CONFIG_HOME"
 }
 
+function Test-ShouldRunInstall {
+    param(
+        [String] $InvocationName
+    )
+
+    # not dot-sourced, run the install flow
+    if ($InvocationName -ne '.') {
+        return $true
+    }
+
+    # dot-sourced, but not in CI, don't run the install flow
+    if (-not $env:CI) {
+        return $false
+    }
+
+    # dot-sourced, in CI, determined by env SCOOP_NOINSTALL
+    $should = $true
+    if ($null -ne $env:SCOOP_NOINSTALL) {
+        $value = $env:SCOOP_NOINSTALL.ToString().Trim().ToLowerInvariant()
+        if ($value -in @('1', 'true', 'yes', 'on')) {
+            $should = $false
+        }
+    }
+
+    return $should
+}
+
 # Prepare variables
 $IS_EXECUTED_FROM_IEX = ($null -eq $MyInvocation.MyCommand.Path)
-
-# Abort when the language mode is restricted
-Test-LanguageMode
 
 # Scoop root directory
 $SCOOP_DIR = $ScoopDir, $env:SCOOP, "$env:USERPROFILE\scoop" | Where-Object { -not [String]::IsNullOrEmpty($_) } | Select-Object -First 1
@@ -820,14 +876,23 @@ $SCOOP_CONFIG_FILE = "$SCOOP_CONFIG_HOME\scoop\config.json"
 # Note: the repository URLs (and the mirror they use) are resolved inside
 # Install-Scoop, after prerequisites pass and the mirror has been detected.
 
-# Quit if anything goes wrong
-$oldErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Stop'
-
-# Logging debug info
-Write-DebugInfo $PSBoundParameters
-# Bootstrap function
-Install-Scoop
-
-# Reset $ErrorActionPreference to original value
-$ErrorActionPreference = $oldErrorActionPreference
+# The install flow triggers only when the script is executed directly, but
+# not when dot-sourced. Dot-sourcing the installer will not trigger the
+# installation, and only the functions will be loaded, e.g., for testing.
+# Downstreams can call `Install-Scoop` explicitly to start the installation.
+# In CI, dot-sourced execution is allowed by default as GitHub Actions executors
+# run the job step in a dot-sourced session. To disable the install flow in CI,
+# set `SCOOP_NOINSTALL=true` to force dot-sourced CI sessions to only
+# load functions.
+$shouldRunInstall = Test-ShouldRunInstall -InvocationName $MyInvocation.InvocationName
+if ($shouldRunInstall) {
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Stop'
+        Test-LanguageMode
+        Write-DebugInfo $PSBoundParameters
+        Install-Scoop
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+}
