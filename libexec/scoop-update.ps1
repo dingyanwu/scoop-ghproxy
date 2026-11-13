@@ -1,4 +1,4 @@
-# Usage: scoop update <app> [options]
+﻿# Usage: scoop update <app> [options]
 # Summary: Update apps, or Scoop itself
 # Help: 'scoop update' updates Scoop to the latest version.
 # 'scoop update <app>' installs a new version of that app, if there is one.
@@ -7,6 +7,7 @@
 #
 # Options:
 #   -f, --force            Force update even when there isn't a newer version
+#                          (also skips the 'scoop_repo is not this fork' prompt)
 #   -g, --global           Update a globally installed app
 #   -i, --independent      Don't install dependencies automatically
 #   -k, --no-cache         Don't use the download cache
@@ -41,6 +42,9 @@ $all = $opt.a -or $opt.all
 
 # load config
 $configRepo = get_config SCOOP_REPO
+# Remember whether the value came from the config file: a missing entry must
+# not be allowed to turn an existing fork install into the official one.
+$configRepoSet = [bool]$configRepo
 if (!$configRepo) {
     $configRepo = 'https://github.com/ScoopInstaller/Scoop'
     set_config SCOOP_REPO $configRepo | Out-Null
@@ -60,6 +64,30 @@ if (($PSVersionTable.PSVersion.Major) -lt 5) {
     break
 }
 $show_update_log = get_config SHOW_UPDATE_LOG $true
+
+function Get-RepoFetchUrl([String] $RepoUrl) {
+    # Actual URL to clone/fetch from for $RepoUrl: any (possibly stale) mirror
+    # prefix is stripped and rebuilt from the current 'github_proxy' config.
+    # Used for self-updates, which follow 'scoop_repo' and ignore the remote.
+    if ([String]::IsNullOrWhiteSpace($RepoUrl)) { return $RepoUrl }
+    $proxy = get_config GITHUB_PROXY
+    $bare = ConvertTo-BareGitHubUri $RepoUrl
+    if (!$proxy -or !$bare) { return $RepoUrl }
+    return $proxy.TrimEnd('/') + '/' + $bare
+}
+
+# Address of this fork, by identity (mirror prefix, '.git' and trailing slash
+# are ignored when comparing). Second-hand forks of this fork keep the same
+# repository name, so any '<user>/scoop-ghproxy' on GitHub counts as upstream.
+$projectRepoPattern = '^https://github\.com/[^/]+/scoop-ghproxy$'
+
+function Get-RepoIdentity([String] $Uri) {
+    if ([String]::IsNullOrWhiteSpace($Uri)) { return '' }
+    $Uri = $Uri.Trim()
+    $bare = ConvertTo-BareGitHubUri $Uri
+    if ($bare) { $Uri = $bare }
+    return ($Uri.TrimEnd('/') -replace '\.git$', '').ToLowerInvariant()
+}
 
 function Sync-Scoop {
     [CmdletBinding()]
@@ -81,7 +109,7 @@ function Sync-Scoop {
         $olddir = "$currentdir\..\old"
 
         # get git scoop
-        Invoke-Git -ArgumentList @('clone', '-q', $configRepo, '--branch', $configBranch, '--single-branch', $newdir)
+        Invoke-Git -ArgumentList @('clone', '-q', (Get-RepoFetchUrl $configRepo), '--branch', $configBranch, '--single-branch', $newdir)
 
         # check if scoop was successful downloaded
         if (!(Test-Path "$newdir\bin\scoop.ps1")) {
@@ -103,10 +131,8 @@ function Sync-Scoop {
         }
 
         $previousCommit = Invoke-Git -Path $currentdir -ArgumentList @('rev-parse', 'HEAD')
-        $currentRepo = Invoke-Git -Path $currentdir -ArgumentList @('config', 'remote.origin.url')
         $currentBranch = Invoke-Git -Path $currentdir -ArgumentList @('branch')
 
-        $isRepoChanged = !($currentRepo -match $configRepo)
         $isBranchChanged = !($currentBranch -match "\*\s+$configBranch")
 
         # Stash uncommitted changes
@@ -120,32 +146,72 @@ function Sync-Scoop {
             }
         }
 
-        # Change remote url if the repo is changed
-        if ($isRepoChanged) {
-            Invoke-Git -Path $currentdir -ArgumentList @('config', 'remote.origin.url', $configRepo)
+        # Self-updates follow 'scoop_repo' only; the recorded remote is irrelevant
+        # and left untouched. The only exception is a config file without any
+        # 'scoop_repo' (e.g. it was reset): keep the repository this install
+        # already tracks instead of silently switching to the official one.
+        $repoUrl = $configRepo
+        if (!$configRepoSet) {
+            $trackedRepo = Invoke-Git -Path $currentdir -ArgumentList @('config', 'remote.origin.url')
+            if ($trackedRepo) {
+                # Strip any mirror prefix before recording it, so the config keeps
+                # the bare repository (the mirror comes from 'github_proxy').
+                $bareTrackedRepo = ConvertTo-BareGitHubUri $trackedRepo
+                if ($bareTrackedRepo) { $trackedRepo = $bareTrackedRepo }
+                $repoUrl = $trackedRepo.TrimEnd('/') -replace '\.git$', ''
+                set_config SCOOP_REPO $repoUrl | Out-Null
+                info "scoop_repo 未配置，已按现有 remote 记录：$repoUrl"
+            }
+        }
+        $fetchUrl = Get-RepoFetchUrl $repoUrl
+
+        # Leaving this fork is a one-way trip: the update replaces this fork's
+        # code (including this accelerated update path), and the fork history is
+        # rebased daily, so the official 'scoop update' cannot bring it back.
+        if ((Get-RepoIdentity $repoUrl) -notmatch $projectRepoPattern) {
+            warn "'scoop_repo' 指向的不是本 Fork：$repoUrl"
+            warn '继续更新会用它覆盖本 Fork 的代码，之后无法通过 scoop update 退回。'
+            if ($force) {
+                warn '已指定 -f/--force，继续更新。'
+            } elseif ([Console]::IsInputRedirected) {
+                abort '已取消。确认要继续请加 -f/--force，或在交互终端里运行。'
+            } else {
+                $answer = Read-Host '是否继续？(yN)'
+                if ($answer -notmatch '^(y|yes)$') { abort '已取消。' }
+            }
         }
 
-        # Fetch and reset local repo if the repo or the branch is changed
-        if ($isRepoChanged -or $isBranchChanged) {
+        # Fetch and reset local repo if the branch is changed
+        if ($isBranchChanged) {
             # Reset git fetch refs, so that it can fetch all branches (GH-3368)
             Invoke-Git -Path $currentdir -ArgumentList @('config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')
-            # fetch remote branch
-            Invoke-Git -Path $currentdir -ArgumentList @('fetch', '--force', 'origin', "refs/heads/$configBranch`:refs/remotes/origin/$configBranch", '-q')
-            # checkout and track the branch
+        }
+        # This fork is rebased onto upstream/master and force-pushed by the
+        # sync workflow, so the remote history is rewritten regularly.
+        # 'git pull' cannot reconcile the resulting divergent branches (Git
+        # refuses to guess a strategy), and merging would resurrect stale
+        # copies of the fork's own patches. Align to the remote branch instead:
+        # fetch straight from 'scoop_repo' (via 'github_proxy' when configured),
+        # force-update the tracking ref, then hard-reset the checkout.
+        $fetchArgs = @('fetch', '--tags', '--force', $fetchUrl, "refs/heads/$configBranch`:refs/remotes/origin/$configBranch", '-q')
+        Invoke-Git -Path $currentdir -ArgumentList $fetchArgs
+        if ($lastexitcode -ne 0) {
+            abort "更新失败：无法从远端拉取分支 '$configBranch'。请检查网络与代理配置后重试。"
+        }
+        if ($isBranchChanged) {
             Invoke-Git -Path $currentdir -ArgumentList @('checkout', '-B', $configBranch, '-t', "origin/$configBranch", '-q')
-            # reset branch HEAD
-            Invoke-Git -Path $currentdir -ArgumentList @('reset', '--hard', "origin/$configBranch", '-q')
-        } else {
-            Invoke-Git -Path $currentdir -ArgumentList @('pull', '--tags', '--force', '-q')
+            if ($lastexitcode -ne 0) {
+                abort "更新失败：无法切换到分支 '$configBranch'。请检查上方的 git 输出后重试。"
+            }
+        }
+        # reset branch HEAD to the (possibly rewritten) remote branch
+        Invoke-Git -Path $currentdir -ArgumentList @('reset', '--hard', "origin/$configBranch", '-q')
+        if ($lastexitcode -ne 0) {
+            abort '更新失败：无法将 Scoop 本体对齐到远端分支。请检查上方的 git 输出后重试。'
         }
 
-        $res = $lastexitcode
         if ($Log) {
             Invoke-GitLog -Path $currentdir -CommitHash $previousCommit
-        }
-
-        if ($res -ne 0) {
-            abort 'Update failed.'
         }
     }
 
@@ -195,7 +261,7 @@ function Sync-Bucket {
             $innerBucketLoc = Find-BucketDirectory $name
 
             $previousCommit = Invoke-Git -Path $bucketLoc -ArgumentList @('rev-parse', 'HEAD')
-            Invoke-Git -Path $bucketLoc -ArgumentList @('pull', '-q')
+            Sync-BucketRepository -Path $bucketLoc
             if ($using:Log) {
                 Invoke-GitLog -Path $bucketLoc -Name $name -CommitHash $previousCommit
             }
@@ -226,7 +292,7 @@ function Sync-Bucket {
             $innerBucketLoc = Find-BucketDirectory $name
 
             $previousCommit = Invoke-Git -Path $bucketLoc -ArgumentList @('rev-parse', 'HEAD')
-            Invoke-Git -Path $bucketLoc -ArgumentList @('pull', '-q')
+            Sync-BucketRepository -Path $bucketLoc
             if ($Log) {
                 Invoke-GitLog -Path $bucketLoc -Name $name -CommitHash $previousCommit
             }

@@ -1,4 +1,4 @@
-$bucketsdir = "$scoopdir\buckets"
+﻿$bucketsdir = "$scoopdir\buckets"
 
 function Find-BucketDirectory {
     <#
@@ -89,6 +89,13 @@ function Convert-RepositoryUri {
     )
 
     process {
+        # Local paths (drive letter, UNC, file://) are valid git repos but have
+        # no provider/user/repo form, so pass them through unchanged. Without
+        # this, 'bucket add <name> F:\mybucket' is rejected as an invalid URL.
+        if ($Uri -match '^(?:[A-Za-z]:[\\/]|\\\\|file://)') {
+            return $Uri
+        }
+
         # https://git-scm.com/docs/git-clone#_git_urls
         # https://regex101.com/r/xGmwRr/1
         if ($Uri -match '(?:@|/{1,3})(?:www\.|.*@)?(?<provider>[^/]+?)(?::\d+)?[:/](?<user>.+)/(?<repo>.+?)(?:\.git)?/?$') {
@@ -98,6 +105,47 @@ function Convert-RepositoryUri {
             error "Please see https://git-scm.com/docs/git-clone#_git_urls for valid ones."
             return $null
         }
+    }
+}
+
+function ConvertTo-BareGitHubUri {
+    # Strip (possibly nested) mirror prefixes in front of a GitHub https URL,
+    # e.g. 'https://gh-proxy.com/https://github.com/user/repo.git'.
+    # Returns $null for anything else (ssh, other forges, local paths).
+    param([String] $Uri)
+
+    # Greedy '.+/' walks to the last embedded 'github.com', so nested prefixes
+    # collapse too.
+    if ($Uri -match '^https?://(?:.+/(?:https?://)?)?(?<target>github\.com/.+)$') {
+        return "https://$($Matches['target'])"
+    }
+}
+
+function Sync-BucketRepository {
+    # 'git pull' for one bucket, through 'github_proxy' when the remote is a
+    # GitHub https URL. 'insteadOf' rewrites the URL for this pull only, so
+    # remote.origin.url (and 'scoop bucket list') stays untouched.
+    param([String] $Path)
+
+    $remote = Invoke-Git -Path $Path -ArgumentList @('config', '--get', 'remote.origin.url')
+    $bare = ConvertTo-BareGitHubUri $remote
+    $proxy = get_config GITHUB_PROXY
+
+    # The mirror is derived from the bare URL, so a stale mirror prefix already
+    # on the remote gets replaced instead of being wrapped twice.
+    if ($proxy -and $bare) {
+        $mirror = $proxy.TrimEnd('/') + '/' + $bare
+        if ($mirror -ne $remote) {
+            Invoke-Git -Path $Path -ArgumentList @('-c', "url.${mirror}.insteadOf=$remote", 'pull', '-q')
+            # shortcut: with 'scoop config proxy' set, Invoke-Git runs git in a job and $LASTEXITCODE stays stale, so the fallback is skipped for those users; official Scoop ignores the result too.
+            if ($LASTEXITCODE -eq 0) { return }
+            warn "通过镜像拉取桶 '$Path' 失败，改为直连 GitHub 重试。"
+        }
+    }
+
+    Invoke-Git -Path $Path -ArgumentList @('pull', '-q')
+    if ($LASTEXITCODE -ne 0) {
+        warn "拉取桶 '$Path' 失败，已跳过。"
     }
 }
 
